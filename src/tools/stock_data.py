@@ -127,19 +127,6 @@ def fetch_stock_info(ticker: str) -> Dict[str, Any]:
     return result
 
 
-# Backward-compatible OOP wrapper (used elsewhere in the codebase)
-class StockDataFetcher:
-    """Deprecated: use StockClient instead."""
-    def __init__(self, config):
-        self.config = config
-
-    def get_stock_info(self, ticker: str) -> Dict[str, Any]:
-        return fetch_stock_info(ticker)
-
-    def get_stock_history(self, ticker: str, period: str = "1y") -> pd.DataFrame:
-        return fetch_stock_history(ticker, period=period)
-
-
 class StockClient:
     def __init__(self, config: Dict[str, Any] | None = None):
         self.config = config or {}

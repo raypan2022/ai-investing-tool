@@ -5,7 +5,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 
 import finnhub
-from .stock_data import StockDataFetcher
+from .stock_data import StockClient
 
 
 # Default market headline keywords to surface macro drivers, risks, and insights
@@ -84,7 +84,7 @@ def fetch_company_news(
     # Resolve full company name for stricter headline filtering
     company_name = None
     try:
-        info = StockDataFetcher({}).get_stock_info(ticker)
+        info = StockClient({}).get_info(ticker)
         if isinstance(info, dict):
             company_name = (info.get("company_name") or "").strip()
     except Exception:
