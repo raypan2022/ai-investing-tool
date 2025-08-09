@@ -1,252 +1,158 @@
-# Stock Analysis AI App - Project Plan
+## AI Investing Tool — Data-Backed Recommendations and Research Assistant
 
-## Overview
-An AI-powered stock analysis application that provides investment recommendations using multiple data sources and analysis methods. Built with open-source models for cost efficiency and infrastructure engineering demonstration.
+### Overview
 
-## Architecture Components
+This project builds a stock analysis platform that delivers data-backed recommendations and a research chat assistant. It combines:
+
+- Short-horizon forecasting (FinGPT forecaster service)
+- Real-time stock basics (yfinance)
+- Technical signals (pandas-ta)
+- Financial news (Finnhub)
+- Retrieval over SEC filings (RAG with FAISS + sentence-transformers)
+
+The recommendation workflow composes these tools into a concise prompt for FinGPT, and optionally performs a second-stage synthesis using RAG citations.
+
+### Architecture
 
 ```
-Frontend (Streamlit/Gradio)
-    ↓
-Workflow Orchestrator
-    ↓
-┌─────────────┬─────────────┬─────────────┬─────────────┐
-│ Stock Data  │ Technical   │ News        │ Financial   │
-│ Tool        │ Analysis    │ Sentiment   │ Reports     │
-│ (yfinance)  │ (pandas-ta) │ (RAG)       │ (RAG)       │
-└─────────────┴─────────────┴─────────────┴─────────────┘
-    ↓
-FinGPT Model (MLX optimized)
-    ↓
-Structured Recommendation Output
+Streamlit UI
+   ↓
+Tools Facade (src/tools/tools.py)
+   ├── get_stock_data()        # StockClient (yfinance)
+   ├── analyze_technical_*()   # TechnicalAnalyzer (pandas-ta)
+   └── get_news()              # NewsClient (Finnhub)
+   ↓
+Prompt Builder → FinGPT Forecaster API (RunPod/FASTAPI)
+   ↓
+Optional: RAG over SEC filings (FAISS + sentence-transformers) → OpenAI synthesis
+   ↓
+Recommendation with rationale and citations
 ```
 
-## Tech Stack
-- **Models**: FinGPT-7B (recommendations), Sentence Transformers (embeddings)
-- **Inference**: MLX (Apple Silicon optimization)
-- **Data Sources**: yfinance, SEC filings, financial news
-- **Vector Search**: FAISS
-- **Technical Analysis**: pandas-ta
-- **Framework**: FastAPI/Flask backend, Streamlit frontend
-- **Agent Framework**: LangGraph (future)
+### Key modules
 
-## Development Phases
+- Stock data: `src/tools/stock_data.py`
+  - Functional API: `fetch_stock_info`, `fetch_stock_history`
+  - Client: `StockClient.get_info/get_history` (normalized fields: price, market cap, ratios, 52w range, etc.)
+- Technical analysis: `src/tools/technical.py`
+  - `TechnicalAnalyzer.analyze_stock` returns RSI/MACD/MAs, volatility, volume, levels, and a simple verdict+confidence
+- News: `src/tools/news.py`
+  - Functional API: `fetch_company_news`, `fetch_market_news`, `get_company_and_market_news`
+  - Client: `NewsClient.company/market`
+  - Market news filters: default macro keywords (case-insensitive) + drop single-stock items (few related symbols)
+- Tools facade: `src/tools/tools.py`
+  - `get_stock_data`, `analyze_technical_indicators`, `get_news`
+  - Unifies error handling (helpers raise; facade catches and returns {'error': ...})
 
-### Phase 1: MVP (Week 1) 🎯
-**Goal**: Basic working prototype with hardcoded logic
+### FinGPT forecaster API
 
-#### Components:
-1. **Basic Model Integration**
-   - Get FinGPT running locally with MLX
-   - Simple prompt → response workflow
-   - Test with hardcoded stock data
+The forecaster is hosted behind a FastAPI endpoint. Example POST (prompt omitted for brevity):
 
-2. **Core Tools (Simplified)**
-   - `stock_data.py`: Basic yfinance wrapper
-   - `technical.py`: RSI + SMA indicators only
-   - `sentiment.py`: Mock sentiment scores
+```bash
+curl -X POST http://localhost:8000/generate \
+  -H "Content-Type: application/json" \
+  -d '{
+    "user_prompt": "... composed from stock basics, news (headline+summary+source), and technicals ..."
+  }'
+```
 
-3. **Simple Workflow**
-   - Chain tools sequentially
-   - Hardcoded scoring weights
-   - Basic recommendation format
+### Setup
 
-**Deliverable**: Button click → stock recommendation
+1. Create env and install deps
 
----
+```bash
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+```
 
-### Phase 2: Enhanced Analysis (Week 2) 🔧
-**Goal**: Real data integration and improved analysis
+2. Configure environment
+   Create `.env` at project root:
 
-#### Components:
-1. **Real Data Integration**
-   - Live yfinance data
-   - Basic news scraping (Yahoo Finance)
-   - Simple file-based document storage
+```
+FINNHUB_API_KEY=your_finnhub_key
+OPENAI_API_KEY=your_openai_key
+FINGPT_ENDPOINT_URL=http://localhost:8000
+FINGPT_API_KEY=optional_if_required
+```
 
-2. **Enhanced Technical Analysis**
-   - Multiple indicators (MACD, Bollinger Bands, Volume)
-   - Pattern recognition basics
-   - Confidence scoring
+### Quick usage
 
-3. **Basic RAG Implementation**
-   - Simple text search in financial documents
-   - Keyword-based retrieval
-   - Basic context injection
+- Tools facade
 
-**Deliverable**: Real-time analysis with actual market data
-
----
-
-### Phase 3: RAG System (Week 3) 📚
-**Goal**: Sophisticated information retrieval
-
-#### Components:
-1. **Vector Search Implementation**
-   - FAISS index creation
-   - Sentence transformer embeddings
-   - Semantic search capabilities
-
-2. **Document Processing Pipeline**
-   - 10-K/10-Q filing parser
-   - News article processing
-   - Economic indicator integration
-
-3. **Smart RAG Queries**
-   - Context-aware query generation
-   - Multi-document synthesis
-   - Relevance scoring
-
-**Deliverable**: AI that can reason about financial documents
-
----
-
-### Phase 4: Advanced Features (Week 4) 🚀
-**Goal**: Production-ready features and optimization
-
-#### Components:
-1. **Dynamic Scoring System**
-   - Research-based weight adjustments
-   - Market condition adaptations
-   - Confidence intervals
-
-2. **Multi-timeframe Analysis**
-   - Short-term vs long-term recommendations
-   - Risk assessment framework
-   - Portfolio considerations
-
-3. **Performance Optimization**
-   - Model quantization
-   - Caching layer
-   - Response time optimization
-
-**Deliverable**: Professional-grade analysis tool
-
----
-
-### Phase 5: Agent System (Week 5+) 🤖
-**Goal**: Flexible query handling and advanced research
-
-#### Components:
-1. **LangGraph Integration**
-   - ReAct agent implementation
-   - Tool selection logic
-   - Multi-step reasoning
-
-2. **Advanced Queries**
-   - Comparative analysis
-   - Sector research
-   - Custom research questions
-
-3. **Production Deployment**
-   - Cloud model serving (Modal/RunPod)
-   - API endpoints
-   - Monitoring and logging
-
-**Deliverable**: Full-featured AI research assistant
-
-## Implementation Details
-
-### Scoring Weights (Research-Based)
 ```python
-SHORT_TERM_WEIGHTS = {
-    'technical_analysis': 0.40,
-    'news_sentiment': 0.30,
-    'recent_earnings': 0.20,
-    'economic_indicators': 0.10
-}
+from src.tools.tools import get_stock_data, analyze_technical_indicators, get_news
 
-LONG_TERM_WEIGHTS = {
-    'fundamental_analysis': 0.50,
-    'economic_trends': 0.25,
-    'technical_analysis': 0.15,
-    'news_sentiment': 0.10
-}
+print(get_stock_data("AAPL"))
+print(analyze_technical_indicators("AAPL"))
+print(get_news("AAPL", days_back=7))
 ```
 
-### Output Format
-```json
-{
-    "short_term": {
-        "verdict": "BUY/HOLD/SELL",
-        "confidence": 0.85,
-        "evidence": [
-            "RSI showing oversold condition (32)",
-            "Positive earnings guidance (+15% revenue growth)",
-            "Strong institutional buying volume"
-        ],
-        "timing": "Entry recommended within 1-2 weeks",
-        "risks": ["Market volatility", "Sector rotation risk"],
-        "price_target": "$150-160"
-    },
-    "long_term": {
-        "verdict": "BUY",
-        "confidence": 0.78,
-        "evidence": [
-            "Revenue CAGR of 12% over 3 years",
-            "Expanding profit margins",
-            "Strong competitive moat"
-        ],
-        "timing": "Dollar-cost average over 3-6 months",
-        "risks": ["Interest rate sensitivity", "Competition"],
-        "price_target": "$200-220"
-    }
-}
+- Clients
+
+```python
+from src.tools.stock_data import StockClient
+from src.tools.news import NewsClient
+
+sc = StockClient()
+info = sc.get_info("AAPL")
+hist = sc.get_history("AAPL", period="6mo")
+
+nc = NewsClient()
+company = nc.company("AAPL", days_back=7, limit=3)
+market = nc.market(days_back=7, limit=3)  # default macro keywords on headlines
 ```
 
-### File Structure
+### Tests
+
+Run with printed output:
+
+```bash
+python -m pytest -s
 ```
-stock-analysis-ai/
+
+- Integration prints:
+  - `tests/test_tools.py`: prints stock snapshot, technical summary, and news (company+market)
+  - `tests/test_news_sentiment.py`: prints a couple of company/market news lines (requires FINNHUB_API_KEY)
+
+### Error handling
+
+- Helper layers (stock/news/technical) raise exceptions on failure
+- Facade (`src/tools/tools.py`) catches and returns consistent `{"error": "..."}` dicts
+
+### File structure (trimmed)
+
+```
+ai-investing-tool2/
 ├── README.md
 ├── requirements.txt
-├── main.py                 # FastAPI app
-├── config.py              # Configuration
-├── models/
-│   ├── __init__.py
-│   └── fingpt_client.py   # FinGPT wrapper
-├── tools/
-│   ├── __init__.py
-│   ├── stock_data.py      # Market data
-│   ├── technical.py       # Technical analysis
-│   ├── sentiment.py       # News analysis
-│   └── rag.py            # Document retrieval
-├── workflow/
-│   ├── __init__.py
-│   ├── orchestrator.py    # Main workflow
-│   └── scoring.py         # Aggregation logic
-├── agents/
-│   ├── __init__.py
-│   └── research_agent.py  # LangGraph agent
-├── data/
-│   ├── documents/         # Financial filings
-│   ├── indices/          # FAISS indices
-│   └── cache/            # Cached results
+├── frontend/
+│   └── streamlit_app.py
+├── src/
+│   ├── models/
+│   │   └── fingpt_client.py
+│   ├── tools/
+│   │   ├── stock_data.py
+│   │   ├── technical.py
+│   │   ├── news.py
+│   │   └── tools.py
+│   ├── agents/
+│   │   ├── langgraph_agent.py
+│   │   └── react_agent.py
+│   └── workflow/
+│       ├── orchestrator.py (WIP)
+│       └── scoring.py (WIP)
 ├── tests/
-│   └── test_tools.py
-└── frontend/
-    └── streamlit_app.py
+│   ├── test_tools.py
+│   ├── test_news_sentiment.py
+│   └── test_technical.py
+└── data/
+    ├── documents/
+    ├── indices/
+    └── cache/
 ```
 
-## Success Metrics
-- **Week 1**: Working end-to-end demo
-- **Week 2**: Real-time data integration
-- **Week 3**: Document-aware recommendations
-- **Week 4**: Production-quality analysis
-- **Week 5**: Flexible research capabilities
+### Notes
 
-## Target Audience
-This project demonstrates skills relevant to AI Infrastructure roles at:
-- Databricks (ML platform engineering)
-- Snowflake (data + AI integration)
-- Similar AI infrastructure companies
-
-## Key Learning Outcomes
-- Open-source model deployment and optimization
-- Multi-modal data integration
-- RAG system implementation
-- AI agent orchestration
-- Production ML system design
-
----
-
-*Note: Start small, iterate fast, and prioritize working functionality over perfect code in early phases.*
+- Market news filtering uses a curated macro keyword list (case-insensitive) and drops single-company items by default. Pass `keywords=[]` to disable filtering, or provide a custom list.
+- RAG over SEC filings is in progress; SEC retrieval + FAISS indexing + sentence-transformers will feed cited context into the final synthesis step.

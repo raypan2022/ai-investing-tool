@@ -1,9 +1,9 @@
 """Financial analysis tools for LangGraph ReAct agent"""
 
-import yfinance as yf
 from typing import Dict, Any, List
-from .stock_data import StockDataFetcher
+from .stock_data import StockClient
 from .technical import TechnicalAnalyzer
+from .news import get_company_and_market_news
 
 
 def get_stock_data(ticker: str) -> Dict[str, Any]:
@@ -12,27 +12,40 @@ def get_stock_data(ticker: str) -> Dict[str, Any]:
     Args:
         ticker: Stock ticker symbol (e.g., 'AAPL', 'GOOGL')
     """
-    fetcher = StockDataFetcher({})
-    result = fetcher.get_stock_info(ticker)
-    
-    # Clean up the result for LLM consumption
-    if 'error' not in result:
+    client = StockClient()
+    try:
+        result = client.get_info(ticker)
+
+        # Clean up and project fields for LLM consumption (aligns with StockClient schema)
+        description = result.get('description', '') or ''
+        if len(description) > 200:
+            description = description[:200] + "..."
         return {
-            'ticker': result['ticker'],
-            'company_name': result['company_name'],
-            'current_price': result['current_price'],
-            'market_cap': result['market_cap'],
-            'pe_ratio': result['pe_ratio'],
-            'pb_ratio': result['pb_ratio'],
-            'dividend_yield': result['dividend_yield'],
-            'sector': result['sector'],
-            'industry': result['industry'],
-            'price_change_1d': result['price_change_1d'],
-            'volume': result['volume'],
-            'description': result['description'][:200] + "..." if len(result['description']) > 200 else result['description']
+            'ticker': result.get('ticker'),
+            'company_name': result.get('company_name'),
+            'current_price': result.get('current_price'),
+            'currency': result.get('currency'),
+            'exchange': result.get('exchange'),
+            'market_cap': result.get('market_cap'),
+            'pe_ratio': result.get('pe_ratio'),
+            'pb_ratio': result.get('pb_ratio'),
+            'dividend_yield': result.get('dividend_yield'),
+            'shares_outstanding': result.get('shares_outstanding'),
+            'sector': result.get('sector'),
+            'industry': result.get('industry'),
+            'price_change_1d': result.get('price_change_1d'),
+            'volume': result.get('volume'),
+            'avg_volume': result.get('avg_volume'),
+            'high_52w': result.get('high_52w'),
+            'low_52w': result.get('low_52w'),
+            'description': description,
+            'last_updated': result.get('last_updated'),
         }
-    else:
-        return result
+    except Exception as exc:
+        return {
+            'ticker': ticker.upper(),
+            'error': f"Failed to get stock data: {str(exc)}",
+        }
 
 
 def analyze_technical_indicators(ticker: str) -> Dict[str, Any]:
@@ -42,61 +55,67 @@ def analyze_technical_indicators(ticker: str) -> Dict[str, Any]:
         ticker: Stock ticker symbol (e.g., 'AAPL', 'GOOGL')
     """
     try:
-        # Get historical data using our StockDataFetcher
-        fetcher = StockDataFetcher({})
-        hist_data = fetcher.get_stock_history(ticker, period="1y")
+        # Get historical data using StockClient
+        client = StockClient()
+        hist_data = client.get_history(ticker, period="1y")
         
         if hist_data.empty:
-            return {"error": f"No historical data available for {ticker}"}
+            raise RuntimeError(f"No historical data available for {ticker}")
         
         # Use the comprehensive TechnicalAnalyzer
         analyzer = TechnicalAnalyzer({})
         analysis = analyzer.analyze_stock(ticker, hist_data)
-        
+
         # Extract key insights for LLM
-        if 'error' not in analysis:
-            summary = {
-                'ticker': analysis['ticker'],
-                'current_price': analysis['current_price'],
-                'rsi': analysis.get('rsi', {}),
-                'macd': analysis.get('macd', {}),
-                'moving_averages': analysis.get('moving_averages', {}),
-                'bollinger_bands': analysis.get('bollinger_bands', {}),
-                'trading_signals': {
-                    'overall_signal': analysis.get('overall_signal', 'HOLD'),
-                    'confidence': analysis.get('confidence', 50),
-                    'buy_signals': analysis.get('buy_signals', []),
-                    'sell_signals': analysis.get('sell_signals', [])
-                },
-                'technical_summary': analysis.get('technical_summary', {}),
-                'support_resistance': analysis.get('pivot_points', {}),
-                'volume_analysis': analysis.get('volume', {})
-            }
-            return summary
-        else:
-            return analysis
+        summary = {
+            'ticker': analysis['ticker'],
+            'current_price': analysis['current_price'],
+            'rsi': analysis.get('rsi', {}),
+            'macd': analysis.get('macd', {}),
+            'moving_averages': analysis.get('moving_averages', {}),
+            'bollinger_bands': analysis.get('bollinger_bands', {}),
+            'trading_signals': {
+                'overall_signal': analysis.get('overall_signal', 'HOLD'),
+                'confidence': analysis.get('confidence', 50),
+                'buy_signals': analysis.get('buy_signals', []),
+                'sell_signals': analysis.get('sell_signals', [])
+            },
+            'technical_summary': analysis.get('technical_summary', {}),
+            'support_resistance': analysis.get('pivot_points', {}),
+            'volume_analysis': analysis.get('volume', {})
+        }
+        return summary
             
     except Exception as e:
         return {"error": f"Technical analysis failed for {ticker}: {str(e)}"}
 
 
-def get_news_sentiment(ticker: str, days_back: int = 7) -> Dict[str, Any]:
-    """Analyze recent news sentiment for a stock.
-    
-    Args:
-        ticker: Stock ticker symbol
-        days_back: Number of days to look back for news
+def get_news(ticker: str, days_back: int = 7) -> Dict[str, Any]:
+    """Fetch concise company and market news using Finnhub-backed helper.
+
+    Note: sentiment fields removed by request; returns only news blocks.
     """
-    # Placeholder - will be implemented with actual news API
-    return {
-        "ticker": ticker,
-        "sentiment_score": 0.0,
-        "sentiment": "neutral",
-        "news_count": 0,
-        "days_analyzed": days_back,
-        "summary": "News sentiment analysis not yet implemented",
-        "status": "placeholder"
-    }
+    try:
+        result = get_company_and_market_news(
+            ticker,
+            days_back=days_back,
+            company_limit=3,
+            market_limit=3,
+        )
+        return {
+            "ticker": result.get("ticker", ticker.upper()),
+            "days_analyzed": days_back,
+            "company_news": result.get("company", {}),
+            "market_news": result.get("market", {}),
+        }
+    except Exception as exc:
+        return {
+            "ticker": ticker.upper(),
+            "news_count": 0,
+            "days_analyzed": days_back,
+            "summary": f"News fetch failed: {str(exc)}",
+            "status": "error",
+        }
 
 
 def query_financial_documents(ticker: str, query: str) -> Dict[str, Any]:
@@ -121,6 +140,6 @@ def query_financial_documents(ticker: str, query: str) -> Dict[str, Any]:
 TOOLS = [
     get_stock_data,
     analyze_technical_indicators,
-    get_news_sentiment,
+    get_news,
     query_financial_documents
 ]

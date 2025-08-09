@@ -22,10 +22,7 @@ class TechnicalAnalyzer:
         """Run minimal technical analysis on OHLCV DataFrame (expects columns: Open, High, Low, Close, Volume)."""
         try:
             if stock_data.empty or len(stock_data) < 50:
-                return {
-                    'error': f"Insufficient data for {ticker}. Need at least 50 rows of OHLCV data.",
-                    'ticker': ticker.upper()
-                }
+                raise ValueError(f"Insufficient data for {ticker}. Need at least 50 rows of OHLCV data.")
 
             close = stock_data['Close']
             high = stock_data['High']
@@ -163,10 +160,8 @@ class TechnicalAnalyzer:
             return result
 
         except Exception as e:
-            return {
-                'error': f"Technical analysis failed for {ticker}: {str(e)}",
-                'ticker': ticker.upper()
-            }
+            # Bubble up for unified error handling at the tool layer
+            raise
 
     # ------------------------- helpers ------------------------- #
 

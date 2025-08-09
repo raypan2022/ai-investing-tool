@@ -1,22 +1,23 @@
-# Core dependencies
-openai>=1.0.0
-yfinance>=0.2.18
-pandas>=2.0.0
-streamlit>=1.28.0
-python-dotenv>=1.0.0
+# Core dependencies (pinned to current latest in this environment)
+openai==1.99.5
+yfinance==0.2.65
+pandas==2.3.1
+streamlit==1.48.0
+python-dotenv==1.1.1
 
-# Technical analysis (when you implement it)
-pandas-ta>=0.3.14b
-numpy>=1.24.0
+# Technical analysis
+pandas-ta==0.4.25b0
+numpy==2.1.3
 
 # LangGraph and LangChain for ReAct agent
-langchain-core>=0.1.0
-langchain-community>=0.0.1
-langgraph>=0.0.1
-langchain-openai>=0.0.1
+langchain-core==0.3.74
+langchain-community==0.3.27
+langgraph==0.6.4
+langchain-openai==0.3.29
 
 # For self-hosted model communication
-requests>=2.31.0
+requests==2.32.4
+finnhub-python==2.4.24
 
 # Development
-pytest>=7.4.0
+pytest==8.4.1
