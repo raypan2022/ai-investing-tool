@@ -33,6 +33,10 @@ Stage 1: FinGPT forecaster (short-horizon view)
   - Freeze date windows (from/to) for determinism when needed.
 - Output: direction (up/down/flat) for next short window, rationale snippets, confidence.
 
+Model details (FinGPT Forecaster)
+
+- The forecaster we use is a PEFT-based adapter (LoRA) fine-tuned on Llama‑2‑7B‑Chat, published on Hugging Face as `FinGPT/fingpt-forecaster_dow30_llama2-7b_lora` [link](https://huggingface.co/FinGPT/fingpt-forecaster_dow30_llama2-7b_lora). It is loaded by applying the PEFT adapter onto the base chat model and then served behind our FastAPI endpoint (e.g., on RunPod).
+
 Stage 2: OpenAI synthesis with RAG (explainability and decision)
 
 - Retrieval:
