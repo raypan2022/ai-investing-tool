@@ -47,12 +47,13 @@ def _strip_unwanted_tags(soup: BeautifulSoup) -> None:
 
 
 def _is_heading_element(tag) -> bool:
+    # Generic: use explicit heading tags as headings
     if tag.name and tag.name.lower() in {"h1", "h2", "h3", "h4", "h5", "h6"}:
         return True
-    # Heuristic: SEC forms often use strong/b tags for section titles like "Item 7. Management's Discussion...".
+    # Also treat bold titles that start with "Item <number>" as headings
     if tag.name and tag.name.lower() in {"b", "strong"}:
         text = tag.get_text(" ", strip=True)
-        return bool(re.match(r"^item\s+\d+\.?", text, flags=re.IGNORECASE))
+        return bool(re.match(r"^item\s+\d+\b", text, flags=re.IGNORECASE))
     return False
 
 
@@ -91,15 +92,51 @@ def parse_html_to_sections(path: str) -> List[FilingSection]:
             section_index += 1
         current_text_parts = []
 
+    def _looks_like_heading_text(tag) -> Optional[str]:
+        # Minimal generic heuristic: allow any common container whose text starts with "Item <number>"
+        if not getattr(tag, "name", None):
+            return None
+        if tag.name.lower() not in {"p", "div", "li", "b", "strong", "span"}:
+            return None
+        txt = _normalize_whitespace(tag.get_text(" ", strip=True))
+        if not txt:
+            return None
+        if re.match(r"^item\s+[0-9]{1,2}[aA]?\b", txt, flags=re.IGNORECASE):
+            return txt
+        return None
+
+    def _is_block_like(tag_name: Optional[str]) -> bool:
+        if not tag_name:
+            return False
+        return tag_name.lower() in {"p", "div", "span", "li"}
+
     for el in body.descendants:
         if getattr(el, "name", None) is None:
             continue
+        # Treat classic heading tags or heading-like text in common containers as section breaks
+        heading_text = None
         if _is_heading_element(el):
+            heading_text = _normalize_whitespace(el.get_text(" ", strip=True))
+        else:
+            heading_text = _looks_like_heading_text(el)
+
+        if heading_text:
             # Flush previous section
             flush_section()
-            current_heading = _normalize_whitespace(el.get_text(" ", strip=True)) or current_heading
+            current_heading = heading_text or current_heading
             continue
         if el.name and el.name.lower() in {"p", "div", "span", "li"}:
+            # Avoid double-counting text from nested containers by only
+            # capturing text for the deepest block-like element in a chain
+            has_block_ancestor = False
+            for parent in getattr(el, "parents", []):
+                if parent is body:
+                    break
+                if _is_block_like(getattr(parent, "name", None)):
+                    has_block_ancestor = True
+                    break
+            if has_block_ancestor:
+                continue
             txt = _normalize_whitespace(el.get_text(" ", strip=True))
             if txt:
                 current_text_parts.append(txt)

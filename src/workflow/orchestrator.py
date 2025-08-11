@@ -15,7 +15,7 @@ from typing import Dict, Any
 
 from src.tools.tools import get_stock_data, analyze_technical_indicators, get_news
 from src.tools.sec_filings import fetch_and_cache_filings, list_local_filings
-from src.tools.rag import build_index_for_ticker, query_index
+from src.tools.rag import build_indices_for_ticker_by_form, query_index
 
 
 def build_forecaster_prompt(ticker: str, *, basics: Dict[str, Any], ta: Dict[str, Any], news: Dict[str, Any]) -> str:
@@ -66,9 +66,18 @@ def run_end_to_end_analysis(ticker: str) -> Dict[str, Any]:
     filings = list_local_filings(ticker)
     index_path = None
     if filings:
-        # Build chunks, embeddings, and index if missing (handled inside build_index_for_ticker)
-        index_path = build_index_for_ticker(ticker, filing_paths=[f.path for f in filings])
-        rag_hits = query_index(ticker, query=f"{ticker} guidance liquidity leverage outlook")
+        # Build form-specific indices
+        idx_paths = build_indices_for_ticker_by_form(ticker, filing_paths=[f.path for f in filings])
+        index_path = idx_paths.get("10-Q") or idx_paths.get("10-K")
+        # Query both and tag source form in meta
+        hits_q = query_index(ticker, query=f"{ticker} guidance liquidity leverage outlook", form="10-Q")
+        hits_k = query_index(ticker, query=f"{ticker} guidance liquidity leverage outlook", form="10-K")
+        # Add label for form provenance to each hit
+        for h in hits_q:
+            h.setdefault("meta", {})["source_form"] = "10-Q"
+        for h in hits_k:
+            h.setdefault("meta", {})["source_form"] = "10-K"
+        rag_hits = (hits_q + hits_k)
     else:
         rag_hits = []
 

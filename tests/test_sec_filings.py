@@ -18,9 +18,9 @@ def test_fetch_latest_10k_10q_live():
         print(f"\nSEC filings for {ticker} -> data/documents/{ticker.upper()}/:")
         for f in filings:
             print(f" - {getattr(f, 'doc_type', None)} | {f.path}")
-            # Path exists and is under data/documents/{TICKER}/{FORM}
+            # Path exists and is under data/documents/{TICKER}/ (flattened)
             assert os.path.exists(f.path)
-            expected_dir = os.path.join("data", "documents", ticker.upper(), f.doc_type)
+            expected_dir = os.path.join("data", "documents", ticker.upper())
             print(f"   expected_dir: {expected_dir}")
             print(f"   path_norm:    {os.path.normpath(f.path)}")
             assert os.path.normpath(f.path).startswith(os.path.normpath(expected_dir))
@@ -46,8 +46,8 @@ def test_list_local_filings_print():
     print(f"\nLocal filings for {ticker} (if any):")
     for f in filings:
         print(f" - {getattr(f, 'doc_type', None)} | {f.path}")
-        # Validate directory structure
-        expected_dir = os.path.join("data", "documents", ticker.upper(), f.doc_type)
+        # Validate directory structure (flattened)
+        expected_dir = os.path.join("data", "documents", ticker.upper())
         print(f"   expected_dir: {expected_dir}")
         print(f"   path_norm:    {os.path.normpath(f.path)}")
         assert os.path.normpath(f.path).startswith(os.path.normpath(expected_dir))

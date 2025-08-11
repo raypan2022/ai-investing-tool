@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import List, Optional
 import glob
 import shutil
+from src.tools.html_preprocess import sanitize_html
 
 SEC_FOLDER = "sec-edgar-filings"
 # Use sensible defaults so local runs work without a .env
@@ -40,36 +41,39 @@ def ensure_ticker_dir(ticker: str) -> str:
 
 
 def ensure_form_dir(ticker: str, form: str) -> str:
-    t = ticker.upper()
-    f = form.upper()
-    dir_path = os.path.join(DOCS_DIR, t, f)
-    os.makedirs(dir_path, exist_ok=True)
-    return dir_path
+    # Flattened layout: use only the ticker directory
+    return ensure_ticker_dir(ticker)
 
 
 def list_local_filings(ticker: str) -> List[FilingPath]:
-    """List files under data/documents/{ticker}/{form}/file.html"""
+    """List files under data/documents/{ticker}/file.html (flattened)."""
     tdir = ensure_ticker_dir(ticker)
     filings: List[FilingPath] = []
     if not os.path.isdir(tdir):
         return filings
-    for form in sorted(os.listdir(tdir)):
-        form_dir = os.path.join(tdir, form)
-        for name in sorted(os.listdir(form_dir)):
-            if name.lower().endswith((".html", ".htm")):
-                # Try to extract YYYYMMDD from filename: TICKER.FORM.YYYYMMDD.html
-                date_in_name = None
-                match = re.search(r"\.(\d{8})\.htm(l)?$", name, flags=re.IGNORECASE)
-                if match:
-                    date_in_name = match.group(1)
-                filings.append(
-                    FilingPath(
-                        ticker=ticker.upper(),
-                        path=os.path.join(form_dir, name),
-                        doc_type=form.upper(),
-                        as_of=date_in_name,
-                    )
+    for name in sorted(os.listdir(tdir)):
+        if name.lower().endswith((".html", ".htm")):
+            # Extract FORM and YYYYMMDD from filename: TICKER.FORM[.YYYYMMDD].html
+            date_in_name = None
+            form_in_name = None
+            m = re.match(r"^[A-Z]+\.([A-Z0-9]+)(?:\.(\d{8}))?\.htm(l)?$", name, flags=re.IGNORECASE)
+            if m:
+                form_in_name = m.group(1).upper()
+                date_in_name = m.group(2)
+            # Normalize common forms
+            doc_form = form_in_name
+            if doc_form == "10K":
+                doc_form = "10-K"
+            elif doc_form == "10Q":
+                doc_form = "10-Q"
+            filings.append(
+                FilingPath(
+                    ticker=ticker.upper(),
+                    path=os.path.join(tdir, name),
+                    doc_type=doc_form,
+                    as_of=date_in_name,
                 )
+            )
     return filings
 
 
@@ -142,7 +146,8 @@ def fetch_and_cache_filings(
                     continue
                 src = fallback[0]
 
-            dest_dir = ensure_form_dir(safe_ticker, form)
+            # Flattened destination directory
+            dest_dir = ensure_ticker_dir(safe_ticker)
 
             # Build destination file name: TICKER.FORM.YYYYMMDD.html (FORM without dashes)
             normalized_form = form.replace("-", "").upper()
@@ -153,7 +158,23 @@ def fetch_and_cache_filings(
                 dest_filename = f"{safe_ticker}.{normalized_form}.html"
 
             dest_path = os.path.join(dest_dir, dest_filename)
-            if not os.path.isfile(dest_path):
+            # Replace any older files for this form
+            normalized_form = form.replace("-", "").upper()
+            for old in glob.glob(os.path.join(dest_dir, f"{safe_ticker}.{normalized_form}*.htm*")):
+                try:
+                    if os.path.abspath(old) != os.path.abspath(dest_path):
+                        os.remove(old)
+                except Exception:
+                    pass
+            # Write sanitized HTML
+            try:
+                with open(src, "r", encoding="utf-8", errors="ignore") as rf:
+                    raw_html = rf.read()
+                cleaned = sanitize_html(raw_html)
+                with open(dest_path, "w", encoding="utf-8") as wf:
+                    wf.write(cleaned)
+            except Exception:
+                # Fallback to raw copy if sanitization/write fails
                 try:
                     shutil.copyfile(src, dest_path)
                 except Exception:

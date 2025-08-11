@@ -207,3 +207,8 @@ marimo/_lsp/
 __marimo__/
 
 YT_LangGraph_ReAct_Pattern.ipynb
+
+data/chunks/*
+data/indices/*
+data/documents/*
+data/vendor/*
