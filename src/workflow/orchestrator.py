@@ -16,7 +16,7 @@ import os
 from datetime import datetime, timedelta, timezone
 
 from src.tools.tools import get_stock_data, analyze_technical_indicators, get_news
-from src.tools.sec_filings import list_local_filings
+from src.tools.sec_filings import list_local_filings, fetch_and_cache_filings
 from src.tools.rag import build_indices_for_ticker_by_form, build_llm_context
 from src.models.openai_client import OpenAIClient
 from src.models.fingpt_client import FinGPTClient
@@ -245,26 +245,27 @@ def analyze_stock_with_forecast_and_rag(
 
     # RAG context over filings
     filings = list_local_filings(ticker)
+    if not filings:
+        # Attempt to fetch and cache a few recent filings (10-K/10-Q) if none exist locally
+        try:
+            fetch_and_cache_filings(ticker, doc_types=None, limit=3)
+        except Exception:
+            pass
+        filings = list_local_filings(ticker)
     if filings:
         build_indices_for_ticker_by_form(ticker, filing_paths=[f.path for f in filings])
     rag_for_prompt = _format_rag_context_for_prompt(ticker, max_per_topic=3)
 
-    # Synthesize with OpenAI
+    # Synthesize with OpenAI (single input prompt)
     openai = OpenAIClient(model=openai_model)
-    final = openai.chat(
-        [
-            {"role": "system", "content": _compose_openai_system_prompt()},
-            {
-                "role": "user",
-                "content": (
-                    f"Ticker: {ticker.upper()}\n\nCondensed Inputs:\n{condensed}\n\nForecaster Output (RunPod):\n{forecaster_raw}\n\n{rag_for_prompt}\n\n"
-                    "Please provide the structured recommendation as specified."
-                ),
-            },
-        ],
-        temperature=0.2,
-        max_completion_tokens=1200,
+    user_prompt = (
+        f"Ticker: {ticker.upper()}\n\n"
+        f"Condensed Inputs:\n{condensed}\n\n"
+        f"Response from FinGPT forecaster LLM model (predicts based on news, financials, and technical analysis):\n{forecaster_raw}\n\n"
+        f"{rag_for_prompt}\n\n"
+        "Please provide the structured recommendation as specified."
     )
+    final = openai.chat(user_prompt, instructions=_compose_openai_system_prompt())
 
     return {
         "ticker": ticker.upper(),
