@@ -88,7 +88,7 @@ def test_build_llm_context_packet(tmp_path):
     out_path = tmp_path / f"{ticker.upper()}_llm_context.txt"
     with open(out_path, "w", encoding="utf-8") as f:
         f.write(f"Ticker: {ticker.upper()}\nWarnings: {packet.get('warnings')}\n\n")
-        for topic in ["business", "performance", "liquidity", "risks"]:
+        for topic in ["business", "performance", "liquidity"]:
             snippets = ctx.get(topic, [])
             f.write(f"[{topic}] ({len(snippets)})\n")
             for i, s in enumerate(snippets, 1):
@@ -107,7 +107,7 @@ def test_build_llm_context_packet(tmp_path):
     # Basic shape assertions
     assert packet.get("ticker") == ticker.upper()
     assert isinstance(ctx, dict)
-    for key in ["business", "performance", "liquidity", "risks"]:
+    for key in ["business", "performance", "liquidity"]:
         assert key in ctx
         assert isinstance(ctx[key], list)
     assert isinstance(srcs, list)

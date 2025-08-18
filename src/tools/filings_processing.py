@@ -53,12 +53,36 @@ def _is_heading_element(tag) -> bool:
     # Also treat bold titles that start with "Item <number>" as headings
     if tag.name and tag.name.lower() in {"b", "strong"}:
         text = tag.get_text(" ", strip=True)
-        return bool(re.match(r"^item\s+\d+\b", text, flags=re.IGNORECASE))
+        # Accept Item N or N[A] with punctuation variants
+        return bool(
+            re.match(r"^item\s+[0-9]{1,2}[aA]?\b", text.replace("\u00a0", " "), flags=re.IGNORECASE)
+        )
     return False
 
 
 def _normalize_whitespace(text: str) -> str:
-    return re.sub(r"\s+", " ", text).strip()
+    # Collapse internal runs of spaces but preserve paragraph breaks via \n\n
+    # First normalize non-breaking spaces
+    text = text.replace("\u00a0", " ")
+    # Replace 3+ newlines with double newline to keep paragraphs
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    # Collapse spaces/tabs but keep newlines
+    def _collapse_line_spaces(s: str) -> str:
+        return re.sub(r"[ \t]+", " ", s)
+    text = "\n".join(_collapse_line_spaces(line) for line in text.split("\n"))
+    return text.strip()
+
+
+ITEM_HEADING_RE = re.compile(
+    r"^\s*ITEM\s+([0-9]{1,2}[A]?)\s*[\.-:\u2013\u2014\u2015]\s*(.+)$",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+
+def _fix_hyphenation(text: str) -> str:
+    # Combine words broken across lines with hyphens, also remove soft hyphen
+    text = text.replace("\u00ad", "")
+    return re.sub(r"(\w+)-\s*\n\s*(\w+)", r"\1\2", text)
 
 
 def parse_html_to_sections(path: str) -> List[FilingSection]:
@@ -96,12 +120,13 @@ def parse_html_to_sections(path: str) -> List[FilingSection]:
         # Minimal generic heuristic: allow any common container whose text starts with "Item <number>"
         if not getattr(tag, "name", None):
             return None
-        if tag.name.lower() not in {"p", "div", "li", "b", "strong", "span"}:
+        if tag.name.lower() not in {"p", "div", "li", "b", "strong", "span", "h1", "h2", "h3", "h4", "h5", "h6"}:
             return None
-        txt = _normalize_whitespace(tag.get_text(" ", strip=True))
+        txt = _normalize_whitespace(tag.get_text("\n", strip=True))
         if not txt:
             return None
-        if re.match(r"^item\s+[0-9]{1,2}[aA]?\b", txt, flags=re.IGNORECASE):
+        m = ITEM_HEADING_RE.match(txt.replace("\u00a0", " "))
+        if m:
             return txt
         return None
 
@@ -137,12 +162,23 @@ def parse_html_to_sections(path: str) -> List[FilingSection]:
                     break
             if has_block_ancestor:
                 continue
-            txt = _normalize_whitespace(el.get_text(" ", strip=True))
+            # Preserve list bullets
+            bullet = "- " if el.name.lower() == "li" else ""
+            txt_raw = el.get_text(" ", strip=True)
+            txt = _normalize_whitespace(txt_raw)
             if txt:
-                current_text_parts.append(txt)
+                current_text_parts.append(bullet + txt)
 
     # Flush tail
+    # Flush tail and post-process hyphenation per section
     flush_section()
+    for i, s in enumerate(sections):
+        sections[i] = FilingSection(
+            section_id=s.section_id,
+            heading=s.heading,
+            text=_fix_hyphenation(s.text),
+            source=s.source,
+        )
     return sections
 
 

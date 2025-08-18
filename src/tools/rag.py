@@ -131,7 +131,7 @@ def build_indices_for_ticker_by_form(ticker: str, *, filing_paths: List[str]) ->
     return {form: build_index_for_ticker_form(ticker, filing_paths=filing_paths, form=form) for form in ("10-K", "10-Q")}
 
 
-def query_index(ticker: str, query: str, *, top_k: int = 5, form: Optional[str] = None) -> List[dict]:
+def query_index(ticker: str, query: str, *, top_k: int = 5, form: Optional[str] = None, bucket: Optional[str] = None) -> List[dict]:
     import numpy as np
 
     ipath = _index_path_for(ticker, form)
@@ -147,29 +147,149 @@ def query_index(ticker: str, query: str, *, top_k: int = 5, form: Optional[str] 
     qvec = model.encode([query], convert_to_numpy=True, normalize_embeddings=True)[0]
     embs = np.array([r["embedding"] for r in recs])
     sims = (embs @ qvec)
-    idx = sims.argsort()[::-1][: max(1, top_k)]
+
+    # --- Minimal gating and light penalties; heavy rerank happens later ---
+
+    adjusted: List[float] = []
+    anchors_mask: List[bool] = []
+    for i, r in enumerate(recs):
+        text = r.get("text", "")
+        meta = r.get("meta", {}) or {}
+        heading = meta.get("heading")
+        lower_text = text.lower()
+
+        # Numeric/anchor detection (hard preference): numbers or table anchors
+        anchor = bool(PF_NUM_RE.search(text) or PF_TABLE_RE.search(text))
+        anchors_mask.append(anchor)
+
+        # Base similarity
+        base = float(sims[i])
+
+        # Anchored boost (tiny)
+        ab = 0.05 if anchor else 0.0
+
+        # Boilerplate penalty when no numbers
+        bp = -0.40 if (not anchor and BOILERPLATE_RE.search(text)) else 0.0
+
+        adjusted.append(base + ab + bp)
+
+    # Hard gate preference: rank anchored first, then backfill if needed
+    adjusted_np = np.array(adjusted)
+    anchors_np = np.array(anchors_mask)
+    anchor_indices = np.where(anchors_np)[0]
+    non_anchor_indices = np.where(~anchors_np)[0]
+
+    ranked_anchor = anchor_indices[np.argsort(adjusted_np[anchor_indices])[::-1]]
+    selected = list(ranked_anchor[: max(1, top_k)])
+    if len(selected) < max(1, top_k):
+        ranked_non_anchor = non_anchor_indices[np.argsort(adjusted_np[non_anchor_indices])[::-1]]
+        need = max(1, top_k) - len(selected)
+        selected.extend(list(ranked_non_anchor[:need]))
+
     return [
-        {"text": recs[i]["text"], "source": recs[i]["source"], "score": float(sims[i]), "meta": recs[i].get("meta", {})}
-        for i in idx
+        {
+            "text": recs[i]["text"],
+            "source": recs[i]["source"],
+            "score": float(adjusted[i]),
+            "meta": recs[i].get("meta", {}),
+        }
+        for i in selected
     ]
 
 
-# --- Compact topic queries (signal > narrative) ---
 TOPIC_QUERIES = {
     "10-Q": {
-        "business":   "Item 2 MD&A Item 2 Results of Operations overview demand pricing ASP mix volume orders backlog channel inventory supply constraints known trends guidance 'primarily due to' 'offset by'",
-        "performance":"Item 2 MD&A Item 2 Results of Operations revenue gross margin operating margin bps bridge pricing mix cost freight warranty utilization opex leverage by segment by geography FX ASP units",
-        "liquidity":  "Item 2 Liquidity and Capital Resources operating cash flow free cash flow capex DSO DIO DPO working capital inventory reserves debt maturities covenants revolving credit availability interest expense variable fixed",
-        "risks":      "Item 4 Controls and Procedures change in internal control disclosure controls ICFR material weakness remediation Item 1 Legal Proceedings new material investigation subpoena settlement cybersecurity incident going concern covenant breach waiver impairment",
+        "business":    "Item 2 MD&A segment operating performance net sales by geography/segment 'dollars in millions' ASP units mix FX 'primarily due to' 'offset by' significant customers vendor concentration inventories DSO DIO DPO",
+        "performance": "Item 2 Results gross margin percentage bps operating margin cost of sales opex drivers ASP shipments 'increase (decrease)' FX impact table",
+        "liquidity":   "Item 2 Liquidity free cash flow capex share repurchase remaining authorization dividend per share restricted cash escrow debt maturities schedule covenants revolver interest commercial paper purchase obligations tax payable",
     },
     "10-K": {
-        "business":   "Item 7 MD&A overview results drivers pricing mix volume FX known trends guidance 'primarily due to' 'offset by' (avoid Item 1 Business)",
-        "performance":"Item 7 MD&A Results of Operations revenue gross margin operating margin bps bridge pricing mix cost freight warranty utilization opex leverage by segment by geography FX ASP units yoy",
-        "liquidity":  "Item 7 Liquidity and Capital Resources cash flows cash requirements free cash flow capex dividends buybacks ASR M&A debt maturities covenants interest rate sensitivity liquidity facilities",
-        "risks":      "Item 9A Controls and Procedures ICFR material weakness remediation auditor opinion Item 3 Legal Proceedings new material investigation subpoena settlement cybersecurity incident going concern covenant breach waiver impairment",
+        "business":    "Item 7 MD&A segment/geo net sales table 'dollars in millions' ASP units mix FX significant customers vendor concentration inventories DSO DIO DPO",
+        "performance": "Item 7 MD&A margin bridge bps pricing mix volume FX outlook 'gross margin percentage' operating margin cost of sales opex table; Item 7A sensitivity table amounts 'hypothetical interest rate'",
+        "liquidity":   "Item 7 Liquidity cash requirements FCF capex buybacks dividends remaining authorization debt maturity schedule interest facilities commercial paper purchase obligations tax payable",
     },
 }
 
+
+
+# --- Post-filter/rerank registry ---
+# Shared regex for rerank
+PF_NUM_RE = re.compile(r"(\$[0-9][0-9,\.]*|[0-9]+(?:\.[0-9]+)?%|\b[1-9][0-9]{1,4}\s?bps\b)", flags=re.IGNORECASE)
+PF_TABLE_RE = re.compile(r"(dollars in millions|following\s+table|increase\s*\(\s*decrease\s*\)|maturity\s+schedule|sensitivity\s+table)", flags=re.IGNORECASE)
+PF_CAUSE_RE = re.compile(r"(primarily due to|offset by|attributable to|drivers|impact)", flags=re.IGNORECASE)
+PF_CURRENT_RE = re.compile(r"(as of\s+[A-Z][a-z]+\s+\d{1,2},\s+\d{4}|for the\s+(three|nine)\s+months\s+ended)", flags=re.IGNORECASE)
+
+# Generic boilerplate/methodology phrases used only for a light penalty when no numbers are present
+BOILERPLATE_RE = re.compile(
+    r"\b(may|could|might|uncertain|adverse impact|believes|is subject to|in accordance with|VAR\s+model|Monte\s+Carlo|segments?\s+.*managed\s+separately|we\s+evaluate\s+the\s+performance\s+of|trade\s+.*disputes)\b",
+    flags=re.IGNORECASE,
+)
+
+ALLOW_SECTIONS = {
+    "business": ("item 2", "item 7"),
+    "performance": ("item 2", "item 7", "item 7a"),
+    "liquidity": ("item 2", "item 7"),
+}
+
+NEG_PERF_RE = re.compile(r"(lease|right-of-use|ROU|VAR\s+model|Monte\s+Carlo|accounting\s+policy)", flags=re.IGNORECASE)
+NEG_BUS_RE = re.compile(r"(segments?\s+.*managed\s+separately|we\s+evaluate\s+the\s+performance\s+of)", flags=re.IGNORECASE)
+NEG_LIQ_RE = re.compile(r"(recent\s+accounting\s+pronouncements|\bASU\b|\bASC\b)", flags=re.IGNORECASE)
+PERF_ROUTE_OUT_RE = re.compile(r"(inventories|inventory|vendor\s+non-trade)", flags=re.IGNORECASE)
+
+
+def _apply_topic_rerank(topic: str, hits: List[dict], latest_q_date: Optional[str]) -> List[dict]:
+    filtered: List[dict] = []
+    for h in hits:
+        txt: str = h.get("text", "")
+        heading: str = ((h.get("meta", {}) or {}).get("heading") or "").lower()
+        if topic in ALLOW_SECTIONS:
+            if not any(tok in heading for tok in ALLOW_SECTIONS[topic]):
+                # Drop wrong sections entirely
+                continue
+
+        nnums = len(PF_NUM_RE.findall(txt))
+        s = 2.0 * nnums
+        if PF_TABLE_RE.search(txt):
+            s += 6.0
+        if PF_CAUSE_RE.search(txt):
+            s += 2.0
+        if PF_CURRENT_RE.search(txt):
+            s += 2.0
+
+        # Prefer most recent 10-Q
+        filed = _parse_date_from_source(h.get("source", "") or "")
+        if latest_q_date and filed == latest_q_date:
+            s += 3.0
+
+        # Bucket-specific negatives only when light on numbers
+        if topic == "performance" and nnums < 2 and NEG_PERF_RE.search(txt):
+            s -= 10.0
+        if topic == "business" and nnums < 2 and NEG_BUS_RE.search(txt):
+            s -= 8.0
+        if topic == "liquidity" and nnums < 2 and NEG_LIQ_RE.search(txt):
+            s -= 6.0
+
+        # Route certain terms out of performance
+        if topic == "performance" and PERF_ROUTE_OUT_RE.search(txt):
+            s -= 6.0
+
+        # Attach rerank score to score field so downstream sort uses it
+        base = float(h.get("score", 0.0))
+        h["score"] = base + s
+        filtered.append(h)
+
+    return filtered if filtered else hits
+
+
+def _make_topic_filter(topic: str):
+    return lambda hits, latest_q: _apply_topic_rerank(topic, hits, latest_q)
+
+
+TOPIC_POST_FILTERS = {
+    "business": _make_topic_filter("business"),
+    "performance": _make_topic_filter("performance"),
+    "liquidity": _make_topic_filter("liquidity"),
+}
 
 
 def _parse_date_from_source(path: str) -> Optional[str]:
@@ -210,13 +330,13 @@ def build_llm_context(ticker: str, max_per_topic: int = 4) -> Dict[str, object]:
     if not k_date:
         warnings.append("Latest 10-K not found")
 
-    topics = ["business", "performance", "liquidity", "risks"]
+    topics = ["business", "performance", "liquidity"]
     context: Dict[str, List[str]] = {k: [] for k in topics}
     sources: List[Dict[str, object]] = []
 
     def fetch(form: str, topic: str) -> List[dict]:
         query = TOPIC_QUERIES.get(form, {}).get(topic, "")
-        hits = query_index(t, query, top_k=12, form=form)
+        hits = query_index(t, query, top_k=12, form=form, bucket=topic)
         prefer = q_date if form == "10-Q" else k_date
         if prefer:
             fhits = [h for h in hits if _parse_date_from_source(h.get("source", "")) == prefer]
@@ -227,6 +347,9 @@ def build_llm_context(ticker: str, max_per_topic: int = 4) -> Dict[str, object]:
     for topic in topics:
         # prefer Q for recency, then K; rank by score
         merged = fetch("10-Q", topic) + fetch("10-K", topic)
+        post_filter = TOPIC_POST_FILTERS.get(topic)
+        if post_filter:
+            merged = post_filter(merged, q_date)
         picked: List[dict] = []
         for h in sorted(merged, key=lambda r: float(r.get("score", 0.0)), reverse=True):
             cid = (h.get("meta", {}) or {}).get("chunk_id")

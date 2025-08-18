@@ -7,30 +7,88 @@ Goals:
 - Drop scripts/styles/nav/footers
 - Unwrap purely-presentational tags
 - Remove repeated page artifacts (e.g., "Apple Inc. | 2024 Form 10-K | 21")
-- Normalize whitespace entities
+- Normalize whitespace entities and Unicode
 """
 
 import re
+import unicodedata
 from bs4 import BeautifulSoup, Comment
 
 
 PAGE_ARTIFACT_RE = re.compile(
-    r"\b(?:Table of Contents|Index)\b|\bForm\s+10-[KQ]\b\s*\|\s*\d{4}\b|\u00a0",
+    (
+        r"(?:\bTable of Contents\b|\bIndex\b|"
+        r"Page\s+\d+\s+of\s+\d+|"
+        r"UNITED STATES SECURITIES AND EXCHANGE COMMISSION|"
+        r"Washington,\s*D\.C\.\s*20549|"
+        r"Cover\s*Page|"
+        r"\u00a0)"
+    ),
     flags=re.IGNORECASE,
 )
 
+# Map common smart punctuation to ASCII so downstream regexes match cleanly
+SMART_PUNCT_MAP = {
+    "\u2018": "'",  # left single
+    "\u2019": "'",  # right single
+    "\u201c": '"',  # left double
+    "\u201d": '"',  # right double
+    "\u2013": "-",  # en dash
+    "\u2014": "-",  # em dash
+    "\u2212": "-",  # minus
+    "\u2022": "-",  # bullet
+}
+
+
+def _normalize_unicode(text: str) -> str:
+    normalized = unicodedata.normalize("NFKC", text)
+    for src, dst in SMART_PUNCT_MAP.items():
+        normalized = normalized.replace(src, dst)
+    return normalized
+
 
 def sanitize_html(raw_html: str) -> str:
+    # Normalize encoding and smart punctuation before parsing
+    raw_html = _normalize_unicode(raw_html)
     soup = BeautifulSoup(raw_html, "lxml")
 
     # Remove noisy containers and non-content
-    for tag_name in ["script", "style", "svg", "noscript", "iframe", "nav", "footer", "img"]:
+    for tag_name in [
+        "script",
+        "style",
+        "svg",
+        "noscript",
+        "iframe",
+        "nav",
+        "footer",
+        "img",
+        "form",
+        "header",
+        "aside",
+    ]:
         for t in soup.find_all(tag_name):
             t.decompose()
 
     # Remove comments
     for c in soup.find_all(string=lambda text: isinstance(text, Comment)):
         c.extract()
+
+    # Handle inline iXBRL: unwrap visible facts, drop hidden ones
+    for t in list(soup.find_all(True)):
+        name = (getattr(t, "name", "") or "").lower()
+        if name.startswith("ix:"):
+            hidden_attr = (t.get("hidden") or "").strip().lower()
+            style = (t.get("style") or "").replace(" ", "").lower()
+            is_hidden = hidden_attr in {"true", "1"} or "display:none" in style
+            if is_hidden:
+                t.decompose()
+            else:
+                t.unwrap()
+
+    # Drop XBRL/link-only containers that add noise
+    for xbrl_name in ["link:linkbase", "link:roleRef", "xbrli:context", "xbrli:unit"]:
+        for t in soup.find_all(xbrl_name):
+            t.decompose()
 
     # Unwrap some purely-presentational tags to reduce nesting
     # Keep <span> because many filings wrap headings in spans; we'll strip attrs later
@@ -99,8 +157,7 @@ def sanitize_html(raw_html: str) -> str:
 
     # Drop residual URL-like tokens (e.g., taxonomy links rendered as text)
     html = re.sub(r"https?://\S+", " ", html)
-    # Collapse excessive whitespace between tags/text
-    html = re.sub(r"\s+", " ", html)
+    # Preserve paragraph structure by not collapsing all whitespace globally
     return html.strip()
 
 
